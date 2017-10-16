@@ -6,6 +6,10 @@ import sys, os
 # Peripheral python modules
 import argparse
 
+import pandas as pd
+import numpy as np
+import networkx as nx
+
 # import this module
 # from . import Graph, output_networkx_graph_as_graphml_for_cytoscape, output_networkx_graph_as_json_for_cytoscapejs
 from graph import Graph, output_networkx_graph_as_graphml_for_cytoscape, output_networkx_graph_as_json_for_cytoscapejs, output_networkx_graph_as_pickle, get_networkx_graph_as_node_edge_dataframes, get_networkx_subgraph_from_randomizations
@@ -88,6 +92,22 @@ def output_networkx_graph_as_files(nxgraph, project_dir, tag, subfolder=""):
 	return output_dir
 
 
+def get_summary_statistics_from_nxgraph(nxgraph, tag):
+
+	nxgraph_nodes_df, nxgraph_edges_df = get_networkx_graph_as_node_edge_dataframes(nxgraph)
+
+	steiners = nxgraph_nodes_df[nxgraph_nodes_df["type"] == "steiner"]
+	prizes = nxgraph_nodes_df[nxgraph_nodes_df["type"] != "steiner"]
+
+	num_all, num_steiner, num_prizes = nxgraph_nodes_df.shape[0], steiners.shape[0], prizes.shape[0]
+	logDeg_all, logDeg_steiner, logDeg_prizes = np.log(nxgraph_nodes_df["degree"]).mean(), np.log(steiners["degree"]).mean(), np.log(prizes["degree"]).mean()
+	connected_components = nx.nx.number_connected_components(nxgraph)
+	singletons = len([len(x) for x in nx.connected_components(nxgraph) if len(x) == 1])
+
+	return [tag, num_all, num_steiner, num_prizes, logDeg_all, logDeg_steiner, logDeg_prizes, connected_components, singletons]
+
+
+
 def main():
 
 	args = parser.parse_args()
@@ -100,14 +120,33 @@ def main():
 
 	# Parameter search
 	results = graph.grid_search_randomizations(args.prize_file, params)
+	summary_stats = []
 
 	for tag, forest, augmented_forest in results: 
 
-		robust_network = get_networkx_subgraph_from_randomizations(augmented_forest, max_size=400)
+		if augmented_forest.number_of_nodes() > 0: 
 
-		output_networkx_graph_as_files(forest,           args.output_dir, tag, subfolder="forest")
-		output_networkx_graph_as_files(augmented_forest, args.output_dir, tag, subfolder="augmented_forest")
-		output_networkx_graph_as_files(robust_network,   args.output_dir, tag, subfolder="robust_network")
+			if params["noisy_edges_repetitions"] == params["random_terminals_repetitions"] == 0: 
+				# For single test runs
+				output_networkx_graph_as_files(forest, args.output_dir, tag, subfolder="forest")
+				summary_stats.append(get_summary_statistics_from_nxgraph(forest, tag))
+
+			else: 
+				# For randomizations
+				robust_network = get_networkx_subgraph_from_randomizations(augmented_forest, max_size=400)
+
+				output_networkx_graph_as_files(augmented_forest, args.output_dir, tag, subfolder="augmented_forest")
+				output_networkx_graph_as_files(robust_network,   args.output_dir, tag, subfolder="robust_network")
+
+		else: 
+
+			print("{} is empty, results not printed.".format(tag))
+
+	if len(summary_stats) > 0: 
+
+		stats_df = pd.DataFrame(summary_stats, columns=["tag", "n_all", "n_steiner", "n_prizes", "logDeg_all", "logDeg_steiner", "logDeg_prizes", "n_components", "n_singletons"])
+		stats_df.sort_values(by=["n_singletons", "n_all"], inplace=True)
+		stats_df.to_csv(args.output_dir+"/summary_stats.tsv", sep='\t', index=False)
 
 
 if __name__ == '__main__':
