@@ -489,6 +489,7 @@ class Graph:
 		else: sys.exit("Randomizations was called with invalid noisy_edges_reps and random_terminals_reps.")
 
 		###########
+		if len(vertex_indices.node_index.values) == 0: return None, None
 		forest, augmented_forest = self.output_forest_as_networkx(vertex_indices.node_index.values, edge_indices.edge_index.values)
 
 		vertex_indices.index = self.nodes[vertex_indices.node_index.values]
@@ -523,6 +524,7 @@ class Graph:
 		logger.info(params)
 
 		forest, augmented_forest = self.randomizations(params["noisy_edges_repetitions"], params["random_terminals_repetitions"])
+		prune_network_graph(forest); prune_network_graph(augmented_forest)
 		
 		return paramstring, forest, augmented_forest
 
@@ -549,8 +551,6 @@ class Graph:
 			n_cpus = multiprocessing.cpu_count()
 
 		pool = multiprocessing.Pool(n_cpus)
-		
-		
 
 		self.prepare_prizes(prize_file)
 
@@ -583,6 +583,22 @@ def k_clique_clustering(nxgraph, k):
 	nx.set_node_attributes(nxgraph, 'kCliqueClusters', invert(nx.k_clique_communities(nxgraph, k)))
 
 
+def remove_singletons(nxgraph):
+	"""
+	Removes singleton nodes inplace. 
+	"""
+	nxgraph.remove_nodes_from(nx.isolates(nxgraph))
+
+
+def prune_network_graph(nxgraph, min_size=5): 
+
+	if nxgraph is None: return 
+
+	small_components = [g.nodes() for g in nx.connected_component_subgraphs(nxgraph, copy=True) if g.number_of_nodes() < min_size]
+	nodes_to_remove = [item for sublist in small_components for item in sublist]
+	nxgraph.remove_nodes_from(nodes_to_remove)
+
+
 def get_networkx_subgraph_from_randomizations(nxgraph, max_size=400): 
 	"""
 	Approach 1: from entire network, attempt to remove lowest robustness node. If removal results in a component 
@@ -595,7 +611,11 @@ def get_networkx_subgraph_from_randomizations(nxgraph, max_size=400):
 
 	if "robustness" not in node_attributes_df.columns: logger.info("WARNING: 'robustness' is not an attribute in subgraph, subgraph may not be meaningful.")
 
-	return nxgraph.subgraph(top_hits)
+	# Get robust subnetwork and remove singleton nodes.
+	robust_network = nxgraph.subgraph(top_hits)
+	prune_network_graph(robust_network)
+
+	return robust_network
 
 
 def get_networkx_graph_as_node_edge_dataframes(nxgraph):
@@ -606,6 +626,8 @@ def get_networkx_graph_as_node_edge_dataframes(nxgraph):
 	Returns:
 		pd.DataFrame: nodes from the input graph and their attributes as a dataframe
 		pd.DataFrame: edges from the input graph and their attributes as a dataframe
+
+	# TODO: throw error when degenerate graph
 	"""
 
 	# Prepare node dataframe
@@ -662,6 +684,18 @@ def output_networkx_graph_as_json_for_cytoscapejs(nxgraph, output_dir, filename=
 		output_dir (str): the directory in which to output the file (named graph_json.json)
 	"""
 
+	class MyEncoder(json.JSONEncoder):
+	    def default(self, obj):
+	        if isinstance(obj, np.integer):
+	            return int(obj)
+	        elif isinstance(obj, np.floating):
+	            return float(obj)
+	        elif isinstance(obj, np.ndarray):
+	            return obj.tolist()
+	        else:
+	            return super(MyEncoder, self).default(obj)
+
+
 	os.makedirs(os.path.abspath(output_dir), exist_ok=True)
 	path = os.path.join(os.path.abspath(output_dir), filename)
 
@@ -669,6 +703,6 @@ def output_networkx_graph_as_json_for_cytoscapejs(nxgraph, output_dir, filename=
 	njs["data"]["name"] = filename.replace(".json", "")
 
 	with open(path,'w') as outf:
-		outf.write(json.dumps(njs, indent=4))
+		outf.write(json.dumps(njs, indent=4, cls=MyEncoder))
 
 	return path

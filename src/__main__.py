@@ -78,16 +78,16 @@ def output_networkx_graph_as_files(nxgraph, project_dir, tag, subfolder=""):
 	Output networkx graph in various formats.
 	"""
 
-	os.makedirs(os.path.abspath(project_dir), exist_ok=True)
 	output_dir = os.path.join(os.path.abspath(project_dir), subfolder)
+	os.makedirs(os.path.abspath(output_dir), exist_ok=True)
 
 
 	nxgraph_nodes_df, nxgraph_edges_df = get_networkx_graph_as_node_edge_dataframes(nxgraph)
 
 	output_networkx_graph_as_pickle(nxgraph, output_dir, tag+".gpickle")
 	output_dataframe_to_tsv(nxgraph_nodes_df, output_dir, tag+".nodes.tsv")
-	output_dataframe_to_tsv(nxgraph_edges_df, output_dir, tag+".edges.tsv")
-	output_networkx_graph_as_json_for_cytoscapejs(nxgraph, output_dir, "{}.{}.json".format(tag, subfolder.replace("/", "")))
+	# output_dataframe_to_tsv(nxgraph_edges_df, output_dir, tag+".edges.tsv")
+	output_networkx_graph_as_json_for_cytoscapejs(nxgraph, output_dir, ".".join([tag, subfolder.replace("/", ""), "json"]))
 
 	return output_dir
 
@@ -99,13 +99,22 @@ def get_summary_statistics_from_nxgraph(nxgraph, tag):
 	steiners = nxgraph_nodes_df[nxgraph_nodes_df["type"] == "steiner"]
 	prizes = nxgraph_nodes_df[nxgraph_nodes_df["type"] != "steiner"]
 
+	mean_prize = nxgraph_nodes_df.prize.mean()
+
 	num_all, num_steiner, num_prizes = nxgraph_nodes_df.shape[0], steiners.shape[0], prizes.shape[0]
-	logDeg_all, logDeg_steiner, logDeg_prizes = np.log(nxgraph_nodes_df["degree"]).mean(), np.log(steiners["degree"]).mean(), np.log(prizes["degree"]).mean()
-	connected_components = nx.nx.number_connected_components(nxgraph)
+	logDeg_all, logDeg_steiner, logDeg_prizes = np.log2(nxgraph_nodes_df["degree"]).median(), np.log2(steiners["degree"]).median(), np.log2(prizes["degree"]).median()
+	connected_components = nx.number_connected_components(nxgraph)
 	singletons = len([len(x) for x in nx.connected_components(nxgraph) if len(x) == 1])
 
-	return [tag, num_all, num_steiner, num_prizes, logDeg_all, logDeg_steiner, logDeg_prizes, connected_components, singletons]
+	return [tag, num_all, num_steiner, num_prizes, mean_prize, logDeg_all, logDeg_steiner, logDeg_prizes, logDeg_steiner-logDeg_prizes, connected_components, singletons]
 
+
+def network_graph_is_degenerate(nxgraph):
+
+	if nxgraph is None: return True
+	if nxgraph.number_of_edges() == 0: return True
+
+	return False
 
 
 def main():
@@ -124,7 +133,7 @@ def main():
 
 	for tag, forest, augmented_forest in results: 
 
-		if augmented_forest.number_of_nodes() > 0: 
+		if not network_graph_is_degenerate(forest): 
 
 			if params["noisy_edges_repetitions"] == params["random_terminals_repetitions"] == 0: 
 				# For single test runs
@@ -136,7 +145,9 @@ def main():
 				robust_network = get_networkx_subgraph_from_randomizations(augmented_forest, max_size=400)
 
 				output_networkx_graph_as_files(augmented_forest, args.output_dir, tag, subfolder="augmented_forest")
-				output_networkx_graph_as_files(robust_network,   args.output_dir, tag, subfolder="robust_network")
+				# output_networkx_graph_as_files(robust_network, args.output_dir, tag, subfolder="robust_network")
+				output_networkx_graph_as_files(robust_network, args.output_dir, tag, subfolder="robust_network")
+				summary_stats.append(get_summary_statistics_from_nxgraph(robust_network, tag))
 
 		else: 
 
@@ -144,8 +155,8 @@ def main():
 
 	if len(summary_stats) > 0: 
 
-		stats_df = pd.DataFrame(summary_stats, columns=["tag", "n_all", "n_steiner", "n_prizes", "logDeg_all", "logDeg_steiner", "logDeg_prizes", "n_components", "n_singletons"])
-		stats_df.sort_values(by=["n_singletons", "n_all"], inplace=True)
+		stats_df = pd.DataFrame(summary_stats, columns=["tag", "n_all", "n_steiner", "n_prizes", "mean_prize", "logDeg_all", "logDeg_steiner", "logDeg_prizes", "logDeg_diff", "n_components", "n_singletons"])
+		stats_df.sort_values(by=["logDeg_diff", "n_singletons", "n_all"], ascending=[True, True, False], inplace=True)
 		stats_df.to_csv(args.output_dir+"/summary_stats.tsv", sep='\t', index=False)
 
 
